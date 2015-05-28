@@ -10,6 +10,8 @@ classdef opLDL < opFactorization
 %   factorization. Optionally, iterative refinement is performed.
 %   Note that A is an explicit matrix.
 %
+%   opLDL(A, thresh) sets the pivot tolerance to thresh.
+%
 %   The following attributes may be changed by the user:
 %    * nitref : the maximum number of iterative refinement steps (3)
 %    * itref_tol : iterative refinement tolerance (1.0e-8)
@@ -31,7 +33,8 @@ classdef opLDL < opFactorization
   properties( SetAccess = private )
     P             % Permutation operator
     L             % Lower triangular factor
-    D             % Diagonal factor
+    D             % (Block-)diagonal factor
+    nnzL          % Number of nonzeros in strict lower triangle of L
   end
 
   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -42,8 +45,8 @@ classdef opLDL < opFactorization
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % opLDL. Constructor
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    function op = opLDL(A)
-      if nargin ~= 1
+    function op = opLDL(A, thresh)
+      if nargin > 2
         error('Invalid number of arguments.');
       end
 
@@ -60,11 +63,16 @@ classdef opLDL < opFactorization
        B             = sparse(A);
       end
       op.A           = opHermitian(B);
-      [L, D, p]      = ldl(tril(B), 'vector');
+      if nargin == 2
+        [L, D, p]    = ldl(tril(B), thresh, 'vector');
+      else
+        [L, D, p]    = ldl(tril(B), 'vector');
+      end
+      op.nnzL        = nnz(L) - n;  % L contains a unit diagonal.
       op.L           = opMatrix(L);
       op.D           = opMatrix(D);
       op.P           = opPermutation(p);
-      op.Ainv        = op.P * inv(op.L') * inv(op.D) * inv(op.L) * op.P';
+      op.Ainv        = op.P' * inv(op.L') * inv(op.D) * inv(op.L) * op.P;
       op.cflag       = ~isreal(A);
     end % function opLDL
 
