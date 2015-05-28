@@ -41,11 +41,7 @@ classdef opPermutation < opSpot
           % Construct operator
           n = length(p);
           op = op@opSpot('Permutation', n, n);
-          if size(p,1) > size(p,2)
-            op.p = p(:,1);
-          else
-            op.p = p(1,:)';
-          end
+          op.p = p(:);
           op.linear = 1;
           op.cflag  = false;
        end % function opPermutation
