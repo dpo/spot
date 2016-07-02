@@ -11,11 +11,20 @@ function d = diag(A)
 
 %   http://www.cs.ubc.ca/labs/scl/spot
 
-   [m,n] = size(A);
-   k = min(m,n);
-   d = zeros(k,1);
-   for i=1:k
-       v = zeros(n,1); v(i) = 1;
-       w = A*v;
-       d(i) = w(i);
+   if ismethod(A, 'diagonal')
+     % If an operator type implements its own efficient diag(), use it.
+     d = A.diagonal();
+
+   else
+
+      [m,n] = size(A);
+      k = min(m,n);
+      d = zeros(k,1);
+      v = zeros(n,1);
+      for i=1:k
+         v(i) = 1;
+         w = A*v;
+         d(i) = w(i);
+         v(i) = 0;
+      end
    end
