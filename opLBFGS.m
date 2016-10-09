@@ -47,11 +47,14 @@ classdef opLBFGS < opSpot
         b;       % Positive curvature components of forward L-BFGS
 
         insert;  % Current insertion point.
-        scaling;
+        gamma;   % Scaling factor.
     end
 
     properties (SetAccess = public)
         update_forward;  % Whether or not to update forward L-BFGS.
+        scaling;
+        updates;         % number of update attempts
+        rejects;         % number of rejected updates
     end
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -78,7 +81,7 @@ classdef opLBFGS < opSpot
           op = op@opSpot('L-BFGS', n, n);
           op.cflag  = false;
           op.sweepflag  = true;
-          op.mem = max(mem, 1);
+          op.mem = min(max(mem, 1), n);
           op.s = zeros(n, op.mem);
           op.y = zeros(n, op.mem);
           op.ys = zeros(op.mem, 1);
@@ -88,11 +91,14 @@ classdef opLBFGS < opSpot
           op.update_forward = false;
           op.insert = 1;
           op.scaling = false;
+          op.gamma = 1;
+          op.updates = 0;
+          op.rejects = 0;
        end % function opLBFGS
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
        function op = set.update_forward(op, val)
-          if val & ~op.update_forward
+          if val && ~op.update_forward
             op.a = zeros(size(op.s));
             op.b = zeros(size(op.s));
           end
@@ -107,14 +113,21 @@ classdef opLBFGS < opSpot
        function op = update(op, s, y)
        %store  Store the new pair {s,y} into the L-BFGS approximation.
        %       Discard oldest pair if memory has been exceeded.
+
+         op.updates = op.updates + 1;
          ys = dot(s, y);
-         if ys <= 1.0e-20;
-           warning('L-BFGS: Rejecting (s,y) pair')
+         if ys <= 1.0e-20
+           warning('L-BFGS: Rejecting {s,y} pair')
+           op.rejects = op.rejects + 1;
          else
 
            op.s(:, op.insert) = s;
            op.y(:, op.insert) = y;
            op.ys(op.insert) = ys;
+
+           if op.scaling
+             op.gamma = ys / (y' * y);
+           end
 
            % Update arrays a and b used in forward products.
            if op.update_forward
@@ -123,7 +136,7 @@ classdef opLBFGS < opSpot
              for i = 1 : op.mem
                k = mod(op.insert + i - 1, op.mem) + 1;
                if op.ys(k) ~= 0
-                 op.a(:, k) = op.s(:, k);                  % Bk0 = I.
+                 op.a(:, k) = op.s(:, k) / op.gamma;
                  for j = 1 : i - 1
                    l = mod(op.insert + j - 1, op.mem) + 1;
                    if op.ys(l) ~= 0
@@ -157,13 +170,37 @@ classdef opLBFGS < opSpot
        end
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+       %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+       function d = diagonal(op)
+       %diag  Extract the diagonal of the limited-memory approximation
+
+         if ~op.update_forward
+           error('L-BFGS: not using forward mode. Set update_forward = true.');
+         end
+
+         d = ones(op.n, 1);
+         if op.scaling
+           d = d / op.gamma;
+         end
+
+         for i = 1 : op.mem
+           k = mod(op.insert + i - 2, op.mem) + 1;
+           if op.ys(k) ~= 0
+             for j = 1 : op.n
+               d(j) = d(j) + op.b(j, k)^2 - op.a(j, k)^2;
+             end
+           end
+         end
+       end % function diagonal
+       %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
     end % Methods
 
 
     methods ( Access = protected )
 
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-       function q = multiply(op, x, mode)
+       function q = multiply(op, x, ~)
        %multiply  Multiply operator with a vector.
        % See, e.g., Nocedal & Wright, 2nd ed., Procedure 7.6, p. 184.
 
@@ -171,50 +208,45 @@ classdef opLBFGS < opSpot
            error('L-BFGS: not using forward mode. Set update_forward = true.');
          end
 
-         a = op.a; b = op.b; ys = op.ys;
          q = x;
+         if op.scaling
+           q = q / op.gamma;
+         end
 
          % B = B0 + ∑ (bb' - aa').
-
          for i = 1 : op.mem
            k = mod(op.insert + i - 2, op.mem) + 1;
-           if ys(k) ~= 0
-             q = q + (b(:, k)' * x) * b(:, k)- (a(:, k)' * x) * a(:, k);
+           if op.ys(k) ~= 0
+             q = q + (op.b(:, k)' * x) * op.b(:, k)- (op.a(:, k)' * x) * op.a(:, k);
            end
          end
        end % function multiply
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-       function r = divide(op, b, mode)
+       function q = divide(op, b, ~)
        %divide  Solve a linear system with the operator.
        % See, e.g., Nocedal & Wright, 2nd ed., Algorithm 7.4, p. 178.
 
          q = b;
-         s = op.s; y = op.y; ys = op.ys; alpha = op.alpha;
 
          for i = 1 : op.mem
            k = mod(op.insert - i - 1, op.mem) + 1;
-           if ys(k) ~= 0
-             alpha(k) = (s(:, k)' * q) / ys(k);
-             q = q - alpha(k) * y(:, k);
+           if op.ys(k) ~= 0
+             op.alpha(k) = (op.s(:, k)' * q) / op.ys(k);
+             q = q - op.alpha(k) * op.y(:, k);
            end
          end
 
-         r = q;
          if op.scaling
-           last = mod(op.insert - 1, op.mem) + 1;
-           if ys(last) ~= 0
-             gamma = ys(last) / (y(:, last)' * y(:, last));
-             r = gamma * r;
-           end
+           q = q * op.gamma;
          end
 
          for i = 1 : op.mem
            k = mod(op.insert + i - 2, op.mem) + 1;
-           if ys(k) ~= 0
-             beta = (op.y(:, k)' * r) / ys(k);
-             r = r + (alpha(k) - beta) * s(:, k);
+           if op.ys(k) ~= 0
+             beta = (op.y(:, k)' * q) / op.ys(k);
+             q = q + (op.alpha(k) - beta) * op.s(:, k);
            end
          end
        end % function divide
